@@ -1,0 +1,52 @@
+#include "lab1.h"
+using namespace std;
+
+#define CHECK {\
+	auto e = cudaDeviceSynchronize();\
+	if (e != cudaSuccess) {\
+		printf("At " __FILE__ ":%d, %s\n", __LINE__, cudaGetErrorString(e));\
+		abort();\
+	}\
+}
+
+int main(int argc, char **argv)
+{
+	Lab1VideoGenerator g;
+	Lab1VideoInfo i;
+	
+	g.get_info(i);
+	if (i.w == 0 || i.h == 0 || i.n_frame == 0 || i.fps_n == 0 || i.fps_d == 0) {
+		puts("Cannot be zero");
+		abort();
+	} else if (i.w%2 != 0 || i.h%2 != 0) {
+		puts("Only even frame size is supported");
+		abort();
+	}
+
+
+	MemoryBuffer<uint8_t> gridb0(GRID_SIZE);
+	SyncedMemory<uint8_t> grids0 = gridb0.CreateSync(GRID_SIZE);
+
+	MemoryBuffer<uint8_t> gridb1(GRID_SIZE);
+	SyncedMemory<uint8_t> grids1 = gridb1.CreateSync(GRID_SIZE);
+
+	unsigned FRAME_SIZE = i.w*i.h*3/2;
+	MemoryBuffer<uint8_t> frameb(FRAME_SIZE);
+	SyncedMemory<uint8_t> frames = frameb.CreateSync(FRAME_SIZE);
+	
+	uint8_t** gpu2DPtr0 = nullptr;
+	cudaMalloc(&gpu2DPtr0, GRID_H * sizeof(uint8_t*));
+	uint8_t** gpu2DPtr1 = nullptr;
+	cudaMalloc(&gpu2DPtr1, GRID_H * sizeof(uint8_t*));
+	
+	FILE *fp = fopen("result.y4m", "wb");
+	fprintf(fp, "YUV4MPEG2 W%d H%d F%d:%d Ip A1:1 C420\n", i.w, i.h, i.fps_n, i.fps_d);
+	for (unsigned j = 0; j < i.n_frame; ++j) {
+		fputs("FRAME\n", fp);
+		g.Generate(&grids0, &grids1, &frames, gpu2DPtr0, gpu2DPtr1);
+		fwrite(frames.get_cpu_ro(), sizeof(uint8_t), FRAME_SIZE, fp);
+	}
+	fclose(fp);
+	
+	return 0;
+}
