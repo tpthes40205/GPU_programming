@@ -1,4 +1,6 @@
 #include "lab3.h"
+#include "math.h"
+#include <stdio.h>
 #include <cstdio>
 
 __device__ __host__ int CeilDiv(int a, int b) { return (a-1)/b + 1; }
@@ -110,6 +112,51 @@ __global__ void CalculateFixed(
 	}
 }
 
+__global__ void calculateRGB(float* bckRGB, const float* target, const float* mask, const int wt, const int ht) {
+	int count = 0;
+	int curt = 0;
+	bckRGB[0] = 0;
+	bckRGB[1] = 0;
+	bckRGB[2] = 0;
+	for (int i = 0; i < ht; i++) {
+		for (int j = 0; j < wt; j++) {
+			if (mask[curt * 3] > 127.0f) {
+				if (i == 0 || i == ht - 1 || j == 0 || j == wt - 1) {
+					RGB_add(bckRGB, &target[curt * 3]);
+					count++; 
+				}
+				else {
+					if (mask[curt - wt] < 127.0 || mask[curt + wt] < 127.0 || mask[curt - 1] < 127.0 || mask[curt + 1] < 127.0) {
+						RGB_add(bckRGB, &target[curt * 3]);
+						count++;
+					}
+				}
+			}
+			curt++;
+		}
+	}
+	bckRGB[0] /= count;
+	bckRGB[1] /= count;
+	bckRGB[2] /= count;
+}
+
+__global__ void initialTransparent(
+	float* buf, const float* background, const float* mask,
+	const int wt, const int ht, const int wb, const int oy, const int ox,
+	const float* bckRGB
+)
+{
+	const int yt = blockIdx.y * blockDim.y + threadIdx.y;
+	const int xt = blockIdx.x * blockDim.x + threadIdx.x;
+	const int curt = wt*yt + xt;
+
+	if (yt < ht && xt < wt && mask[curt] > 127.0f) {
+		const int glob = wb*(oy + yt) + (ox + xt);
+		RGB_add(&buf[curt * 3], &background[glob * 3]);
+		RGB_sub(&buf[curt * 3], bckRGB);
+	}
+}
+
 __global__ void PoissonImageCloningIteration(
 	const float* fixed, 
 	const float* mask, 
@@ -134,6 +181,8 @@ __global__ void PoissonImageCloningIteration(
 
 }
 
+
+
 __global__ void SimpleClone(
 	const float *background,
 	const float *target,
@@ -157,14 +206,16 @@ __global__ void SimpleClone(
 	}
 }
 
+
 void PoissonImageCloning(const float *background, const float *target, const float *mask, float *output,
 	const int wb, const int hb, const int wt, const int ht, const int oy, const int ox)
 {
 	// set up
-	float *fixed, *buf1, *buf2;
+	float *fixed, *buf1, *buf2, *bckRGB;
 	cudaMalloc(&fixed, 3 * wt*ht * sizeof(float));
 	cudaMalloc(&buf1, 3 * wt*ht * sizeof(float));
 	cudaMalloc(&buf2, 3 * wt*ht * sizeof(float));
+	cudaMalloc(&bckRGB, 3  * sizeof(float));
 	dim3 gdim(CeilDiv(wt, 32), CeilDiv(ht, 16)), bdim(32, 16);
 
 	// check target exceed border
@@ -174,22 +225,23 @@ void PoissonImageCloning(const float *background, const float *target, const flo
 	checkBorder <<<gdim, bdim>>>(mask_border, wb, hb, wt, ht, oy, ox);
 
 	// initialize the iteration
-	
 	printf("initializing\n");
+	CalculateFixed<<<gdim, bdim>>> (background, target, mask_border, fixed, wb, hb, wt, ht, oy, ox);
 
-	CalculateFixed <<<gdim, bdim>>> (background, target, mask_border, fixed, wb, hb, wt, ht, oy, ox);
+	// initialize buf1
 	cudaMemcpy(buf1, target, sizeof(float) * 3 * wt*ht, cudaMemcpyDeviceToDevice);
-	
-	
-	for (int i = 0; i < 10000; ++i) {
-		printf("iteration: %d\n", i);
+	calculateRGB<<<1,1>>> (bckRGB, target, mask, wt, ht);
+	initialTransparent<<<gdim, bdim>>>(buf1, background, mask_border, wt, ht, wb, oy, ox, bckRGB);
+
+	// iteration
+	for (int i = 0; i < 16000; ++i) {
+		printf("iteration %d\n", i);
 		PoissonImageCloningIteration <<<gdim, bdim>>> (fixed, mask_border, buf1, buf2, wt, ht);
 		PoissonImageCloningIteration <<<gdim, bdim>>> (fixed, mask_border, buf2, buf1, wt, ht);
 	}
-	
 	cudaMemcpy(output, background, wb * hb * sizeof(float) * 3, cudaMemcpyDeviceToDevice);
-	SimpleClone <<<gdim, bdim >>>( background, buf1, mask_border, output,
-		wb, hb, wt, ht, oy, ox);
+
+	SimpleClone <<<gdim, bdim >>>( background, buf1, mask_border, output,wb, hb, wt, ht, oy, ox);
 
 	cudaFree(fixed);
 	cudaFree(buf1);
