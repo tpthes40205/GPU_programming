@@ -9,7 +9,7 @@
 
 #include <thrust/device_vector.h>
 
-#define THREAD_SIZE 500
+#define THREAD_SIZE 200
 
 struct not_space
 {
@@ -36,23 +36,17 @@ void CountPosition1(const char *text, int *pos, int text_size)
 	thrust::transform(pos_ptr, pos_ptr + text_size, key.begin(), pos_ptr, thrust::multiplies<int>());	//  pos:	1230123400012	
 }
 
-void CountPosition2(const char *text, int *pos, int text_size)
-{
-	int block_size = text_size/THREAD_SIZE/10000;
-	count_kernel <<<block_size, THREAD_SIZE>>>(text, pos, text_size);
-	check_kernel <<<block_size, THREAD_SIZE >>>(pos, text_size);
-}
 
 __global__ void count_kernel(const char *text, int *pos, int text_size) {
-	
-	int block_begin =((long long int)(blockIdx.x*blockDim.x + threadIdx.x)*text_size) /(gridDim.x*blockDim.x);
+
+	int block_begin = ((long long int)(blockIdx.x*blockDim.x + threadIdx.x)*text_size) / (gridDim.x*blockDim.x);
 	int block_end = ((long long int)(blockIdx.x*blockDim.x + threadIdx.x + 1)*text_size) / (gridDim.x*blockDim.x);
 	not_space n_space;
 
-	if (n_space(text[block_begin])) {pos[block_begin] = 1;}
+	if (n_space(text[block_begin])) { pos[block_begin] = 1; }
 
-	for (int i = block_begin+1; i < block_end; i++) {
-		if (n_space(text[i])) {pos[i] = pos[i-1] + 1;}
+	for (int i = block_begin + 1; i < block_end; i++) {
+		if (n_space(text[i])) { pos[i] = pos[i - 1] + 1; }
 	}
 }
 
@@ -61,8 +55,16 @@ __global__ void check_kernel(int *pos, int text_size) {
 		int block_begin = ((long long int)(blockIdx.x*blockDim.x + threadIdx.x)*text_size) / (gridDim.x*blockDim.x);
 		int i = block_begin;
 		while (pos[i] != 0) {
-			pos[i] = pos[i-1] + 1;
+			pos[i] = pos[i - 1] + 1;
 			i++;
 		}
 	}
 }
+
+void CountPosition2(const char *text, int *pos, int text_size)
+{
+	int block_size = text_size/THREAD_SIZE/5000;
+	count_kernel <<<block_size, THREAD_SIZE>>>(text, pos, text_size);
+	check_kernel <<<block_size, THREAD_SIZE >>>(pos, text_size);
+}
+
